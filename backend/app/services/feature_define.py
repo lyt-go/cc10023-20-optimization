@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.drift_review import drift_review_store
 from app.store import store
 
 
@@ -16,6 +17,51 @@ class FeatureDefineService(BaseModuleService):
     STATUS_ORDER = ["草稿", "待校验", "已生效", "已废弃"]
     ACTION_RULES = {"提交校验": "待校验", "标记生效": "已生效", "标记废弃": "已废弃"}
     NEGATIVE_ACTIONS = []
+
+    # ── 漂移复核口径：以监控周期定级结果更新计算准入规则 ──
+    def refresh_compute_admission(self, define_id: int) -> dict[str, Any]:
+        """按漂移复核字段结果刷新特征定义的计算准入规则（按日期生效）。
+
+        关联使用定义标识（特征编号），同名的另一条定义不受影响。
+        """
+        entry = store.find(self.MODULE, define_id)
+        if entry is None:
+            return {"ok": False, "message": f"特征定义 {define_id} 不存在"}
+        define_code = str(entry.get("特征编号", ""))
+        rules = {}
+        for item in drift_review_store.catalogue(define_code):
+            rules[item["生效日期"]] = {
+                "准入结论": item["准入结论"],
+                "裁决依据": item["裁决依据"],
+                "说明": item["说明"],
+            }
+        entry["计算准入规则"] = rules
+        entry["准入规则版本"] = len(rules)
+        return {
+            "ok": True,
+            "define_id": define_id,
+            "定义标识": define_code,
+            "admission_rules": rules,
+            "rule_dates": sorted(rules),
+        }
+
+    def read_drift_review_catalog(
+        self, define_id: int, date: str | None = None
+    ) -> dict[str, Any]:
+        """特征定义目录读取漂移复核字段结果，可按日期查到限制和依据。"""
+        entry = store.find(self.MODULE, define_id)
+        if entry is None:
+            return {"ok": False, "message": f"特征定义 {define_id} 不存在"}
+        define_code = str(entry.get("特征编号", ""))
+        items = drift_review_store.catalogue(define_code, date)
+        return {
+            "ok": True,
+            "define_id": define_id,
+            "定义标识": define_code,
+            "特征名称": entry.get("特征名称"),
+            "query_date": date,
+            "items": items,
+        }
 
     # ── 链路1: 特征源 → 特征定义 → 特征计算 → 特征快照 ──
     def validate_definitions_batch(self, define_ids: list[int]) -> dict[str, Any]:
